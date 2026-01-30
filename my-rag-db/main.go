@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -10,6 +10,10 @@ import (
 	"os"
 	"strings"
 )
+
+type Config struct {
+	Synonyms map[string][]string `json:"synonyms"`
+}
 
 // --- AI API 相关结构体 ---
 type Message struct {
@@ -28,6 +32,50 @@ type ChatResponse struct {
 	} `json:"choices"`
 }
 
+func loadConfig(fileName string) (*Config, error) {
+	file, err := os.Open(fileName)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var config Config
+	decoder := json.NewDecoder(file)
+	err = decoder.Decode(&config)
+	if err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+// 加载文件夹下的所有文本文件内容
+func loadAllDocs(folderPath string) ([]string, error) {
+	var allDocs []string
+	// 读取文件夹下的所有文件
+	files, err := os.ReadDir(folderPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, file := range files {
+		// 只读取以 .txt 结尾的文件
+		if !file.IsDir() && strings.HasSuffix(file.Name(), ".txt") {
+			filePath := folderPath + "/" + file.Name()
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				fmt.Printf("读取文件 %s 失败: %v\n", file.Name(), err)
+				continue
+			}
+			// 将内容按行拆分并加入知识库
+			lines := strings.Split(string(content), "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					allDocs = append(allDocs, line)
+				}
+			}
+		}
+	}
+	return allDocs, nil
+}
 // 调用 AI 的函数
 func askAI(apiKey, prompt string) string {
 	apiUrl := "https://api.deepseek.com/chat/completions"
@@ -61,47 +109,32 @@ func askAI(apiKey, prompt string) string {
 }
 
 // 模拟语义打分：根据关键词和预设的语义关系计算匹配度
-func calculateScore(doc, query string) float64 {
+func calculateScore(doc, query string, config *Config) float64 {
 	score := 0.0
 	doc = strings.ToLower(doc)
 	query = strings.ToLower(query)
 
-	// 1. 硬匹配：直接包含关键词，给最高分
+	// 基础匹配：如果直接包含关键词，给最高分
 	if strings.Contains(doc, query) {
 		score += 10.0
 	}
 
-	// 2. 模拟语义联想：这是 RAG 实习面试常考的“知识图谱”或“语义搜索”思想
-	// 我们手动模拟一些向量数据库能自动识别的“意思相近”词
-	synonyms := map[string][]string{
-		"冷":  {"气温", "温度", "冬季", "寒冷", "冰", "湿冷"},
-		"ai": {"人工智能", "机器人", "模型", "deepseek", "rag", "vla"},
-		"go": {"编程", "后端", "开发", "并发", "计算机"},
-	}
-
-	for key, words := range synonyms {
-		// 逻辑：如果用户搜的词(query)在我们的关联词表(words)里
-		// 或者用户搜的词就是 key 本身
-		userTalkingAboutThisTopic := false
-		if strings.Contains(query, key) {
-			userTalkingAboutThisTopic = true
-		}
-		for _, word := range words {
-			if strings.Contains(query, word) {
-				userTalkingAboutThisTopic = true
-			}
-		}
-
-		// 如果确定用户在聊这个话题，就去文档里找对应的关键词
-		if userTalkingAboutThisTopic {
-			if strings.Contains(doc, key) {
-				score += 5.0
-			}
-			for _, word := range words {
-				if strings.Contains(doc, word) {
-					score += 2.0 // 命中相关词也加分
+	// --- 也就是你刚才问的那段代码，添加在这里 ---
+	for key, words := range config.Synonyms {
+		// 只要 query 包含 key（例如“冷”），或者包含 words 里的任何一个（例如“气温”），就视为命中
+		match := strings.Contains(query, key)
+		if !match {
+			for _, w := range words {
+				if strings.Contains(query, w) {
+					match = true
+					break
 				}
 			}
+		}
+
+		// 如果用户提问命中了语义词，且文档(doc)里含有核心词(key)，则加分
+		if match && strings.Contains(doc, key) {
+			score += 5.0
 		}
 	}
 	return score
@@ -109,17 +142,23 @@ func calculateScore(doc, query string) float64 {
 
 // --- 主逻辑 ---
 func main() {
+	config, err := loadConfig("config.json")
+	if err != nil {
+		fmt.Println("加载配置失败:", err)
+		return
+	}
 	apiKey := "sk-7fc194096e114465a32221fe902c4ea0" // 替换为真实的 Key
 
-	// 1. 加载本地知识库 (data.txt)
-	file, _ := os.Open("data.txt")
-	defer file.Close()
-	var knowledgeBase []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		knowledgeBase = append(knowledgeBase, scanner.Text())
-	}
 
+	// --- 粘贴这段新代码 ---
+// 2. 加载 docs 文件夹下的所有知识 (确保你已经写好了 loadAllDocs 函数)
+knowledgeBase, err := loadAllDocs("docs")
+if err != nil {
+    fmt.Println("加载知识库失败:", err)
+    return
+}
+fmt.Printf(">>> 成功加载了 %d 条知识条目。\n", len(knowledgeBase))
+// ---------------------
 	// 2. 获取用户提问
 	var query string
 	fmt.Print("请输入您想咨询的问题关键词: ")
@@ -132,7 +171,7 @@ func main() {
 
 	fmt.Println(">>> 正在进行智能语义匹配...")
 	for _, doc := range knowledgeBase {
-		score := calculateScore(doc, query)
+		score := calculateScore(doc, query, config)
 		if score > maxScore {
 			maxScore = score
 			bestContext = doc

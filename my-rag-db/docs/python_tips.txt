@@ -1,0 +1,1 @@
+Python 的 Pydantic 库非常适合做数据校验。
