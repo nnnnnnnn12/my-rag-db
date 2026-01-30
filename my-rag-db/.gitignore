@@ -1,0 +1,8 @@
+# 忽略编译后的可执行文件
+*.exe
+*.exe~
+__debug_bin
+
+# 忽略你的 API Key (如果以后你把 Key 写在配置文件里)
+config.yaml
+.env
