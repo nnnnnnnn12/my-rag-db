@@ -1,15 +1,16 @@
 package main
 
 import (
-
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+
+	"github.com/gin-gonic/gin"
 )
 
 type Config struct {
@@ -48,6 +49,7 @@ func loadConfig(fileName string) (*Config, error) {
 	}
 	return &config, nil
 }
+
 // 加载文件夹下的所有文本文件内容
 func loadAllDocs(folderPath string) ([]string, error) {
 	var allDocs []string
@@ -77,6 +79,7 @@ func loadAllDocs(folderPath string) ([]string, error) {
 	}
 	return allDocs, nil
 }
+
 // 调用 AI 的函数
 func askAI(apiKey, prompt string) string {
 	apiUrl := "https://api.deepseek.com/chat/completions"
@@ -143,104 +146,73 @@ func calculateScore(doc, query string, config *Config) float64 {
 
 // --- 主逻辑 ---
 func main() {
-	config, err := loadConfig("config.json")
-	if err != nil {
-		fmt.Println("加载配置失败:", err)
-		return
-	}
-	apiKey := "sk-7fc194096e114465a32221fe902c4ea0" // 替换为真实的 Key
+	// 1. 初始化配置和知识库
+	config, _ := loadConfig("config.json")
+	knowledgeBase, _ := loadAllDocs("docs")
+	apiKey := "sk-54856bff18774119952f437b26705f82" // 别忘了填入你的 Key
 
+	// 2. 创建一个默认的 Gin 引擎
+	r := gin.Default()
+	r.Use(func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Next()
+	})
+	// 3. 定义一个 GET 接口：/chat
+	r.GET("/chat", func(c *gin.Context) {
+		// 从网址参数里获取问题，例如 /chat?q=气温
+		query := c.Query("q")
+		if query == "" {
+			c.JSON(400, gin.H{"error": "请提供问题关键词 q"})
+			return
+		}
 
-	// --- 粘贴这段新代码 ---
-// 2. 加载 docs 文件夹下的所有知识 (确保你已经写好了 loadAllDocs 函数)
-knowledgeBase, err := loadAllDocs("docs")
-if err != nil {
-    fmt.Println("加载知识库失败:", err)
-    return
-}
-fmt.Printf(">>> 成功加载了 %d 条知识条目。\n", len(knowledgeBase))
-// ---------------------
-	// 2. 获取用户提问
-	var query string
-	fmt.Print("请输入您想咨询的问题关键词: ")
-	fmt.Scanln(&query)
+		// --- 下面就是你刚才写的并发检索逻辑 ---
+		type SearchResult struct {
+			Score   float64
+			Context string
+		}
+		resultChan := make(chan SearchResult, len(knowledgeBase))
+		var wg sync.WaitGroup
 
-	// 3. 检索最相关的上下文
-	// 3. 检索最相关的上下文（升级版：从 Contains 变为 Score 打分）
-	// --- 粘贴这段新的并发检索逻辑 ---
+		for _, doc := range knowledgeBase {
+			wg.Add(1)
+			go func(d string) {
+				defer wg.Done()
+				score := calculateScore(d, query, config)
+				if score > 0 {
+					resultChan <- SearchResult{Score: score, Context: d}
+				}
+			}(doc)
+		}
 
-// 定义一个临时结构体，用来在“通道”里传递结果
-type SearchResult struct {
-    Score   float64
-    Context string
-}
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
 
-// 1. 创建一个通道 (Channel)，就像是一个传送带，用来收集各个协程算出的分数
-resultChan := make(chan SearchResult, len(knowledgeBase))
-// 2. 创建一个等待组 (WaitGroup)，用来监督是不是所有工人都干完活了
-var wg sync.WaitGroup
+		var bestContext string
+		var maxScore float64
+		for res := range resultChan {
+			if res.Score > maxScore {
+				maxScore = res.Score
+				bestContext = res.Context
+			}
+		}
 
-fmt.Println(">>> 正在启动多任务并发检索 (Goroutines)...")
+		// --- 调用 AI 生成回答 ---
+		finalPrompt := fmt.Sprintf("背景资料：%s\n用户问题：%s", bestContext, query)
+		answer := askAI(apiKey, finalPrompt)
 
-for _, doc := range knowledgeBase {
-    wg.Add(1) // 告诉等待组：又多了一个任务
-    
-    // 启动协程 (go 关键字是魔法所在)
-    go func(d string) {
-        defer wg.Done() // 函数结束时，告诉等待组任务完成了
-        score := calculateScore(d, query, config)
-        if score > 0 {
-            // 把结果扔进传送带
-            resultChan <- SearchResult{Score: score, Context: d}
-        }
-    }(doc) // 把当前的 doc 传进去
-}
+		// --- 以 JSON 格式把结果返回给浏览器 ---
+		c.JSON(200, gin.H{
+			"query":    query,
+			"context":  bestContext,
+			"score":    maxScore,
+			"ai_reply": answer,
+		})
+	})
 
-// 3. 启动一个“监视哨”协程
-// 它的任务是等大家干完活后，把传送带(通道)关掉
-go func() {
-    wg.Wait()
-    close(resultChan)
-}()
-
-// 4. 从传送带上挑选出分数最高的那个结果
-var bestContext string
-var maxScore float64
-for res := range resultChan {
-    if res.Score > maxScore {
-        maxScore = res.Score
-        bestContext = res.Context
-    }
-}
-
-// 下面接你原本的“结果判断”逻辑（if maxScore == 0 ...）
-// ----------------------------
-
-	// 结果判断
-	if maxScore == 0 {
-		fmt.Println("⚠️ 本地未检索到相关内容，将由 AI 自由发挥...")
-		bestContext = "无相关本地背景知识。"
-	} else {
-		fmt.Printf("🎯 命中本地知识 (匹配分: %.1f): %s\n", maxScore, bestContext)
-	}
-
-	// 4. 构造 RAG 专属 Prompt
-	// 这是 RAG 的核心：告诉 AI，根据我给你的背景资料来回答
-	finalPrompt := fmt.Sprintf(`你是我的私人助理。
-背景资料：
-"""
-%s
-"""
-用户问题：%s
-请结合背景资料，用亲切的语气回答用户。`, bestContext, query)
-
-	fmt.Println("\n>>> 正在检索并请求 AI 生成回答...")
-
-	// 5. 获取 AI 回复
-	answer := askAI(apiKey, finalPrompt)
-
-	fmt.Println("\n--------------------------------")
-	fmt.Println("AI 助手的回答：")
-	fmt.Println(answer)
-	fmt.Println("--------------------------------")
+	// 4. 启动 Web 服务，默认监听 8080 端口
+	fmt.Println("🚀 RAG 机器人 Web 服务已启动：http://localhost:8080/chat?q=你的问题")
+	r.Run(":8080")
 }
