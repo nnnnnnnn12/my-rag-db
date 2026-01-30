@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -159,12 +160,11 @@ func main() {
 	})
 	// 3. 定义一个 GET 接口：/chat
 	r.GET("/chat", func(c *gin.Context) {
-		// 从网址参数里获取问题，例如 /chat?q=气温
-		query := c.Query("q")
-		if query == "" {
-			c.JSON(400, gin.H{"error": "请提供问题关键词 q"})
-			return
-		}
+    query := c.Query("q")
+    if query == "" {
+        c.JSON(400, gin.H{"error": "请提供问题关键词 q"})
+        return
+    }
 
 		// --- 下面就是你刚才写的并发检索逻辑 ---
 		type SearchResult struct {
@@ -200,18 +200,38 @@ func main() {
 		}
 
 		// --- 调用 AI 生成回答 ---
-		finalPrompt := fmt.Sprintf("背景资料：%s\n用户问题：%s", bestContext, query)
-		answer := askAI(apiKey, finalPrompt)
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+    c.Writer.Header().Set("Cache-Control", "no-cache")
+    c.Writer.Header().Set("Connection", "keep-alive")
 
-		// --- 以 JSON 格式把结果返回给浏览器 ---
-		c.JSON(200, gin.H{
-			"query":    query,
-			"context":  bestContext,
-			"score":    maxScore,
-			"ai_reply": answer,
-		})
-	})
+    // 直接在这里构造请求，实现边读边发
+    payload := map[string]interface{}{
+        "model": "deepseek-chat",
+        "messages": []map[string]string{
+            {"role": "user", "content": fmt.Sprintf("背景资料：%s\n用户问题：%s", bestContext, query)},
+        },
+        "stream": true,
+    }
+    jsonData, _ := json.Marshal(payload)
+    req, _ := http.NewRequest("POST", "https://api.deepseek.com/chat/completions", bytes.NewBuffer(jsonData))
+    req.Header.Set("Content-Type", "application/json")
+    req.Header.Set("Authorization", "Bearer "+apiKey)
 
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil { return }
+    defer resp.Body.Close()
+
+    // 重点：逐行扫描并实时 Flush 给浏览器
+    reader := bufio.NewReader(resp.Body)
+    for {
+        line, err := reader.ReadString('\n')
+        if err != nil { break }
+        if strings.HasPrefix(line, "data: ") {
+            c.Writer.Write([]byte(line))
+            c.Writer.Flush() // 立即发送到网页，不缓存
+        }
+    }
+})
 	// 4. 启动 Web 服务，默认监听 8080 端口
 	fmt.Println("🚀 RAG 机器人 Web 服务已启动：http://localhost:8080/chat?q=你的问题")
 	r.Run(":8080")

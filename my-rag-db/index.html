@@ -31,15 +31,37 @@
             chatBox.innerHTML += `<div class="user">我: ${input.value}</div>`;
             
             try {
-                // 请求你的 Go 后端接口
-                const response = await fetch(`http://localhost:8080/chat?q=${encodeURIComponent(input.value)}`);
-                const data = await response.json();
-                
-                // 显示 AI 回答及检索到的上下文
-                chatBox.innerHTML += `<div class="ai">
-                    <b>AI:</b> ${data.ai_reply}<br>
-                    <small style="color:#999">检索依据: ${data.context || '无'}</small>
-                </div>`;
+            
+                // --- 粘贴这段新的流式处理逻辑 ---
+              const response = await fetch(`http://localhost:8080/chat?q=${encodeURIComponent(input.value)}`);
+              const reader = response.body.getReader();
+              const decoder = new TextDecoder();
+
+               // 先创建一个空的 AI 回答框
+               let aiDiv = document.createElement('div');
+               aiDiv.className = 'ai';
+                  aiDiv.innerHTML = '<b>AI:</b> ';
+                   chatBox.appendChild(aiDiv);
+
+            while (true) {
+               const { done, value } = await reader.read();
+                 if (done) break;
+    
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+    
+    for (let line of lines) {
+        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+            try {
+                const data = JSON.parse(line.substring(6));
+                const content = data.choices[0].delta.content || "";
+                // 实时把新字追加到网页上
+                aiDiv.innerHTML += content.replace(/\n/g, '<br>');
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } catch (e) { /* 忽略解析错误 */ }
+        }
+    }
+}
             } catch (err) {
                 chatBox.innerHTML += `<div class="ai" style="color:red">错误: 无法连接到后端</div>`;
             }
