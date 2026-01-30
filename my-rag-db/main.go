@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"io"
 	"net/http"
 	"os"
@@ -166,17 +167,54 @@ fmt.Printf(">>> 成功加载了 %d 条知识条目。\n", len(knowledgeBase))
 
 	// 3. 检索最相关的上下文
 	// 3. 检索最相关的上下文（升级版：从 Contains 变为 Score 打分）
-	var bestContext string
-	var maxScore float64
+	// --- 粘贴这段新的并发检索逻辑 ---
 
-	fmt.Println(">>> 正在进行智能语义匹配...")
-	for _, doc := range knowledgeBase {
-		score := calculateScore(doc, query, config)
-		if score > maxScore {
-			maxScore = score
-			bestContext = doc
-		}
-	}
+// 定义一个临时结构体，用来在“通道”里传递结果
+type SearchResult struct {
+    Score   float64
+    Context string
+}
+
+// 1. 创建一个通道 (Channel)，就像是一个传送带，用来收集各个协程算出的分数
+resultChan := make(chan SearchResult, len(knowledgeBase))
+// 2. 创建一个等待组 (WaitGroup)，用来监督是不是所有工人都干完活了
+var wg sync.WaitGroup
+
+fmt.Println(">>> 正在启动多任务并发检索 (Goroutines)...")
+
+for _, doc := range knowledgeBase {
+    wg.Add(1) // 告诉等待组：又多了一个任务
+    
+    // 启动协程 (go 关键字是魔法所在)
+    go func(d string) {
+        defer wg.Done() // 函数结束时，告诉等待组任务完成了
+        score := calculateScore(d, query, config)
+        if score > 0 {
+            // 把结果扔进传送带
+            resultChan <- SearchResult{Score: score, Context: d}
+        }
+    }(doc) // 把当前的 doc 传进去
+}
+
+// 3. 启动一个“监视哨”协程
+// 它的任务是等大家干完活后，把传送带(通道)关掉
+go func() {
+    wg.Wait()
+    close(resultChan)
+}()
+
+// 4. 从传送带上挑选出分数最高的那个结果
+var bestContext string
+var maxScore float64
+for res := range resultChan {
+    if res.Score > maxScore {
+        maxScore = res.Score
+        bestContext = res.Context
+    }
+}
+
+// 下面接你原本的“结果判断”逻辑（if maxScore == 0 ...）
+// ----------------------------
 
 	// 结果判断
 	if maxScore == 0 {
