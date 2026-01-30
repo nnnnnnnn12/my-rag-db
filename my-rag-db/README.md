@@ -1,20 +1,22 @@
-# Simple Go RAG Assistant 🚀
+# My-RAG-DB: 高性能轻量级 RAG 知识库系统
 
-这是一个基于 Go 语言实现的轻量级 RAG（检索增强生成）原型。
+本项目是针对研一计算机硕士研究方向（VLA 与 AI 应用开发）构建的实验性 RAG 原型。它解决了基础检索在处理大规模文档时的延迟痛点。
 
-## 🌟 项目亮点
-- **高性能并发：** 利用 Go 协程（Goroutine）模拟多模型并行调用。
-- **本地知识库：** 支持从 `data.txt` 实时检索上下文。
-- **AI 集成：** 接入 DeepSeek/OpenAI 兼容接口进行智能回答润色。
+## 🚀 核心技术架构
 
-## 🛠️ 技术栈
-- **Language:** Go 1.24+
-- **Protocol:** OpenAI API Protocol / MCP 思想
-- **Library:** Standard Library (net/http, bufio, encoding/json)
+* **高性能并发检索**：利用 Go 语言的 **Goroutine** 和 **Channel** 实现了多源文档的并行扫描，大幅提升了检索效率。
+* **流式响应 (Streaming)**：基于 **SSE** 协议实现了打字机式的实时交互，优化了端到端响应感。
+* **动态语义配置**：通过 `config.json` 驱动的同义词权重算法，增强了关键词召回的准确性。
 
-## 🏃 快速启动
-1. 在 `data.txt` 中添加你的本地知识。
-2. 在 `main.go` 中配置你的 `API_KEY`。
-3. 运行：
-   ```bash
-   go run main.go
+## 📂 目录结构
+
+* `main.go`: 后端核心逻辑（并发与流式 API）。
+* `docs/`: 存放 .txt 格式的知识库文档。
+* `index.html`: 响应式前端交互界面。
+* `config.json`: 语义匹配配置文件。
+
+## ⚙️ 快速启动
+
+1.  在 `main.go` 中填入你的 API Key。
+2.  将相关论文或笔记放入 `docs/`。
+3.  运行：`go run main.go`。
